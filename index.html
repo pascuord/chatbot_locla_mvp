@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Asistente Experto en Cosmética (RAG)</title>
+    <style>
+        /* BASE Y ALINEACIÓN GLOBAL */
+        body { font-family: 'Inter', Arial, sans-serif; margin: 0; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        
+        #chatContainer { 
+            width: 100%; 
+            max-width: 650px; 
+            background: white; 
+            border-radius: 12px; 
+            box-shadow: 0 6px 15px rgba(0,0,0,0.1); 
+            display: flex; 
+            flex-direction: column; 
+            height: 90vh;
+        }
+        
+        /* CABECERA Y AVATAR */
+        h1 { 
+            color: #333; 
+            padding: 15px 20px; 
+            margin: 0; 
+            font-size: 1.5rem; 
+            border-bottom: 1px solid #eee;
+            display: flex; 
+            align-items: center;
+            justify-content: center;
+            gap: 10px; 
+            position: relative; 
+        }
+        .expert-icon {
+            color: #ff69b4; 
+            width: 24px;
+            height: 24px;
+        }
+        #newChatButton {
+            position: absolute;
+            right: 20px;
+            padding: 5px 10px;
+            font-size: 0.8rem;
+            background-color: #f5f5f5;
+            color: #333;
+            border-radius: 20px;
+            transition: background-color 0.2s;
+            font-weight: 500;
+        }
+
+        /* ÁREA DE MENSAJES */
+        #responseArea { 
+            flex-grow: 1;
+            padding: 20px; 
+            overflow-y: auto; 
+            background-color: #f9f9f9;
+        }
+        .message-row { display: flex; margin-bottom: 15px; }
+        .assistant-row { justify-content: flex-start; }
+        .user-row { justify-content: flex-end; }
+
+        .chat-message.assistant { background-color: #e2f0d9; color: #28a745; border-radius: 18px 18px 18px 4px; }
+        .chat-message.user { background-color: #007bff; color: white; border-radius: 18px 18px 4px 18px; }
+        .chat-message { max-width: 80%; padding: 10px 15px; font-size: 0.95rem; line-height: 1.4; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+
+        /* Estilo del texto que activa el popover */
+        .product-button {
+            color: #ff69b4; 
+            font-weight: 700;
+            cursor: pointer;
+            text-decoration: underline;
+            padding: 2px 0;
+            display: inline;
+        }
+        
+        /* === ESTILOS DEL POPOVER/MODAL DE PRODUCTO (SOLUCIÓN AL POSICIONAMIENTO) === */
+        .product-popover-overlay {
+            position: fixed; 
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.6); 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000; 
+        }
+
+        .product-popover-content {
+            background-color: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            max-width: 450px;
+            width: 90%;
+            position: relative;
+            /* Layout de la tarjeta */
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 20px;
+        }
+
+        .product-popover-content .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            cursor: pointer;
+            color: #555;
+            line-height: 1;
+        }
+
+        .product-popover-content img {
+            width: 100%;
+            height: auto;
+            border-radius: 6px;
+        }
+
+        .product-details h4 { margin-top: 0; margin-bottom: 5px; color: #333; font-size: 1.1rem; }
+        .product-details p { margin: 0; font-size: 0.85rem; color: #555; }
+        .product-details .price { font-weight: 700; color: #28a745; margin-top: 5px; }
+
+        .product-details .buy-button {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 8px 15px;
+            background-color: #ff69b4;
+            color: white;
+            text-decoration: none;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            transition: background-color 0.2s;
+        }
+        /* ======================================= */
+
+        /* Estilos de Control - Responsividad */
+        #inputGroup { display: flex; padding: 15px 20px; border-top: 1px solid #eee; gap: 10px; }
+        #userInput { flex-grow: 1; padding: 10px 15px; border: 1px solid #ddd; border-radius: 20px; font-size: 1rem; }
+        button { padding: 10px 18px; border-radius: 20px; cursor: pointer; border: none; transition: background-color 0.3s, transform 0.1s; font-weight: 600; }
+        #talkButton:active { transform: scale(0.95); background-color: #c0392b !important; }
+        #sendButton { background-color: #007bff; color: white; }
+        #talkButton { background-color: #17a2b8; color: white; }
+        
+        /* === ANIMACIÓN DE CARGA MEJORADA === */
+        .loading-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            /* Usamos un color que contraste pero que esté en la gama del asistente */
+            background-color: #1a73e8; /* Azul suave o el color principal de la burbuja */
+            border-radius: 50%;
+            margin: 0 2px;
+            animation: typing 1.5s infinite ease-in-out;
+            opacity: 0; /* Empieza invisible */
+        }
+        
+        /* Ajustamos el delay para crear el efecto de "escribiendo" */
+        .loading-dot:nth-child(1) { animation-delay: 0.0s; }
+        .loading-dot:nth-child(2) { animation-delay: 0.3s; }
+        .loading-dot:nth-child(3) { animation-delay: 0.6s; }
+
+        @keyframes typing {
+            0%, 100% { opacity: 0.2; }
+            50% { opacity: 1; }
+        }
+        /* ==================================== */
+        
+        @media (max-width: 700px) {
+            #chatContainer { height: 100vh; border-radius: 0; }
+            #newChatButton { display: none; }
+            .product-popover-content {
+                grid-template-columns: 1fr; 
+                max-width: 90%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="chatContainer">
+        <h1>
+            <svg class="expert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm-1-4h.01L12 7.01 11.99 7l-.01 6z"/>
+            </svg>
+            La Experta en Piel (RAG Local)
+            <button id="newChatButton" onclick="startNewChat()">Nuevo Chat</button>
+        </h1>
+        <div id="responseArea">
+            <div id="initial-message" class="message-row assistant-row">
+                <div class="chat-message assistant">
+                    ¡Hola! Soy La Experta en Piel. Pregúntame sobre productos, ingredientes o rutinas.
+                </div>
+            </div>
+        </div>
+
+        <div id="inputGroup">
+            <input type="text" id="userInput" placeholder="Escribe tu mensaje..." autocomplete="off">
+            <button id="sendButton" onclick="sendMessage()">Enviar</button>
+            <button 
+                id="talkButton" 
+                onmousedown="startListening()" 
+                onmouseup="stopListening()"
+                ontouchstart="startListening()"
+                ontouchend="stopListening()"
+            >
+                Hablar
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let conversationHistory = [];
+        let recognition;
+        const initialMessageHTML = document.getElementById('initial-message').outerHTML; 
+
+        // === DATOS SIMULADOS PARA LA TARJETA ===
+        const productMetadata = {
+            "First Aid Beauty Ultra Repair": {
+                img: 'https://placehold.co/120x120/ADD8E6/000000?text=Ultra+Repair',
+                desc: 'Crema reparadora intensiva formulada con avena coloidal. Ideal para pieles secas, eccema y zonas ásperas. No comedogénica.',
+                price: '34.95€',
+                ing: 'Avena Coloidal, Glicerina, Manteca de Karité, Ceramidas.'
+            },
+            "Solución Salicylic Acid 2%": {
+                img: 'https://placehold.co/120x120/90EE90/000000?text=Salicylic+Acid',
+                desc: 'Exfoliante químico que penetra los poros para combatir puntos negros y brotes de acné. Mejora visiblemente la textura.',
+                price: '12.50€',
+                ing: 'Ácido Salicílico (2%), Agua, Propanediol, Glicol Butileno.'
+            },
+            "Mascarilla 10 minutos": {
+                img: 'https://placehold.co/120x120/FFC0CB/000000?text=Mascarilla',
+                desc: 'Mascarilla de arcilla purificante que absorbe el exceso de grasa y reduce los poros. Perfecta para pieles grasas y mixtas.',
+                price: '28.00€',
+                ing: 'Arcilla de Caolín, Azufre, Glicerina, Extracto de Menta.'
+            }
+        };
+        // ============================================
+
+
+        // --- FUNCIÓN QUE MUESTRA/OCULTA EL POPOVER DE PRODUCTO (CLIC) ---
+        function toggleProductCard(productName) {
+            window.speechSynthesis.cancel();
+            
+            const metadata = productMetadata[productName] || productMetadata["First Aid Beauty Ultra Repair"];
+            const existingOverlay = document.getElementById('productOverlay');
+
+            if (existingOverlay) {
+                existingOverlay.remove();
+                return;
+            }
+
+            const cardHTML = `
+                <div id="productOverlay" class="product-popover-overlay" onclick="this.remove()">
+                    <div class="product-popover-content" onclick="event.stopPropagation()">
+                        <span class="close-btn" onclick="document.getElementById('productOverlay').remove()">
+                            &times;
+                        </span>
+                        <img src="${metadata.img}" alt="${productName}">
+                        <div class="product-details">
+                            <h4>${productName}</h4>
+                            <p>${metadata.desc}</p>
+                            <p style="font-style: italic;">Ingredientes clave: ${metadata.ing.split(',').slice(0, 3).join(', ')}</p>
+                            <p class="price">Precio: ${metadata.price}</p>
+                            <a href="#" class="buy-button" onclick="alert('Funcionalidad de compra simulada para ${productName}'); return false;">
+                                Añadir al Carrito
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.body.insertAdjacentHTML('beforeend', cardHTML);
+        }
+
+        // -----------------------------------------------------------
+
+        function renderHistory() {
+            const responseArea = document.getElementById('responseArea');
+            let htmlContent = '';
+
+            if (conversationHistory.length === 0) {
+                 htmlContent = initialMessageHTML;
+            } else {
+                conversationHistory.forEach(turn => {
+                    const role = turn.role;
+                    let text = turn.parts[0].text;
+                    
+                    // --- CORRECCIÓN DE FORMATO: Convierte saltos de línea (\n) a HTML <br> ---
+                    text = text.replace(/\n/g, '<br>');
+                    // --------------------------------------------------------------------------
+
+                    // POST-PROCESAMIENTO: CONVERSIÓN DE MARCADORES A BOTONES CLICABLES
+                    if (role === 'model') {
+                        text = text.replace(/<PRODUCTO>(.*?)<\/PRODUCTO>/g, (match, name) => {
+                            const safeName = name.replace(/'/g, "\\'"); 
+                            return `<span class="product-button" onclick="toggleProductCard('${safeName}')">${name}</span>`;
+                        });
+                    }
+
+                    // --- NUEVA LÓGICA DE FORMATO ---
+                    // Reemplazar saltos de línea (\n) con <br> para formatear listas y párrafos
+                    text = text.replace(/\n/g, '<br>');
+                    // --------------------------------
+
+                    const roleClass = role === 'user' ? 'user' : 'assistant';
+                    const rowClass = role === 'user' ? 'user-row' : 'assistant-row';
+                    
+                    htmlContent += `
+                        <div class="message-row ${rowClass}">
+                            <div class="chat-message ${roleClass}">${text}</div>
+                        </div>
+                    `;
+                });
+            }
+            
+            responseArea.innerHTML = htmlContent;
+            responseArea.scrollTop = responseArea.scrollHeight; 
+        }
+
+        // --- FUNCIONES DE CONTROL ---
+        function startNewChat() {
+            window.speechSynthesis.cancel();
+            conversationHistory = [];
+            renderHistory(); 
+            const responseArea = document.getElementById('responseArea');
+            responseArea.innerHTML += `
+                <div class="message-row assistant-row">
+                    <div class="chat-message assistant" style="font-style: italic; opacity: 0.8;">
+                        Memoria reiniciada. ¿En qué te puedo ayudar hoy?
+                    </div>
+                </div>
+            `;
+        }
+
+        async function sendMessage() {
+            const userInputElement = document.getElementById('userInput');
+            const userMessage = userInputElement.value.trim();
+            const responseArea = document.getElementById('responseArea');
+
+            if (!userMessage) return;
+
+            // Deshabilitar botones y limpiar input
+            userInputElement.value = ''; 
+            document.getElementById('sendButton').disabled = true;
+            document.getElementById('talkButton').disabled = true;
+            document.getElementById('newChatButton').disabled = true;
+
+            conversationHistory.push({ role: "user", parts: [{ text: userMessage }] });
+            
+            renderHistory();
+            
+            responseArea.innerHTML += `
+                <div id="loadingIndicator" class="message-row assistant-row">
+                    <div class="chat-message assistant">
+                        <span class="loading-dot"></span>
+                        <span class="loading-dot"></span>
+                        <span class="loading-dot"></span>
+                    </div>
+                </div>
+            `;
+            responseArea.scrollTop = responseArea.scrollHeight;
+
+            try {
+                const response = await fetch('http://localhost:5000/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ history: conversationHistory }) 
+                });
+
+                const data = await response.json();
+                
+                const loading = document.getElementById('loadingIndicator');
+                if (loading) loading.remove();
+
+                if (data.error) {
+                    conversationHistory.pop(); 
+                    renderHistory();
+                    responseArea.innerHTML += `<div class="error-message message-row user-row" style="color:red; justify-content: flex-start; padding: 10px;">Error: ${data.error}</div>`;
+                } else {
+                    const textToSpeak = data.response;
+                    
+                    conversationHistory.push({ role: "model", parts: [{ text: textToSpeak }] }); 
+                    renderHistory();
+
+                    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+                    utterance.lang = 'es-ES';
+                    window.speechSynthesis.speak(utterance);
+                }
+            } catch (error) {
+                const loading = document.getElementById('loadingIndicator');
+                if (loading) loading.remove();
+                conversationHistory.pop();
+                renderHistory();
+                responseArea.innerHTML += `<div class="error-message message-row user-row" style="color:red; justify-content: flex-start; padding: 10px;">Error de conexión local: Asegúrate de que Flask esté corriendo.</div>`;
+            } finally {
+                document.getElementById('sendButton').disabled = false;
+                document.getElementById('talkButton').disabled = false;
+                document.getElementById('newChatButton').disabled = false;
+            }
+        }
+
+        let recognitionActive = false;
+        
+        function startListening() {
+            if (!('webkitSpeechRecognition' in window) || recognitionActive) return;
+            
+            if (recognition) { recognition.stop(); }
+
+            const talkButton = document.getElementById('talkButton');
+            const sendButton = document.getElementById('sendButton');
+            const newChatButton = document.getElementById('newChatButton');
+            
+            recognition = new webkitSpeechRecognition();
+            recognition.lang = 'es-ES'; 
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+            
+            recognition.onstart = function() {
+                recognitionActive = true;
+                talkButton.textContent = '🔴 Grabando... (Suelte para Enviar)';
+                sendButton.disabled = true;
+                newChatButton.disabled = true;
+            }
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                document.getElementById('userInput').value = transcript;
+            }
+
+            recognition.onerror = function(event) {
+                console.error(event.error);
+                talkButton.textContent = 'Hablar';
+                sendButton.disabled = false;
+                newChatButton.disabled = false;
+                recognitionActive = false;
+                recognition = null; 
+            }
+
+            recognition.onend = function() {
+                talkButton.textContent = 'Hablar';
+                sendButton.disabled = false;
+                newChatButton.disabled = false;
+                recognitionActive = false;
+            }
+            
+            recognition.start();
+        }
+        
+        function stopListening() {
+            if (recognitionActive) {
+                recognition.stop();
+                
+                setTimeout(() => {
+                    const transcript = document.getElementById('userInput').value.trim();
+                    if (transcript !== "") {
+                        sendMessage();
+                    }
+                }, 100); 
+            }
+        }
+
+        // --- EVENTO PARA ENVIAR CON TECLA INTRO ---
+        document.getElementById('userInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault(); 
+                sendMessage();
+            }
+        });
+        
+        // Renderizar el mensaje inicial al cargar
+        document.addEventListener('DOMContentLoaded', renderHistory);
+    </script>
+</body>
+</html>
