@@ -1,0 +1,8 @@
+# Archivos de base de datos grandes (RAG/SQLite)
+db_cosmetica.db
+*.sqlite
+*.db
+
+# Directorios de Python
+__pycache__/
+venv/
