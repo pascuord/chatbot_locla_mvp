@@ -1,4 +1,4 @@
-# 🧴 Asistente Experto en Cosmética (RAG Local · Coste Cero)
+# 🧴 Asistente Experto en Cosmética (RAG Local)
 
 ![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=flat&logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-Backend-000000?style=flat&logo=flask&logoColor=white)
@@ -19,7 +19,7 @@
 Un chatbot conversacional avanzado que actúa como **experto en cosmética**, combinando el poder de la **arquitectura RAG (Retrieval-Augmented Generation)** con un **modelo de lenguaje Llama 3 (8B)** ejecutado totalmente **en local sobre GPU NVIDIA**.
 
 💡 **Ventaja principal:**  
-Toda la inteligencia artificial se ejecuta en **hardware local**, sin depender de APIs externas → **Coste de operación = 0 €**
+Toda la inteligencia artificial se ejecuta en **hardware local**, sin depender de APIs externas
 
 ---
 
