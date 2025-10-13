@@ -168,7 +168,7 @@ Frontend Developer & AI Enthusiast
 An advanced conversational chatbot acting as a **cosmetics expert**, powered by a **RAG (Retrieval-Augmented Generation)** architecture and a **Llama 3 (8B)** open-source LLM running **fully locally on an NVIDIA GPU**.
 
 💡 **Main advantage:**  
-All AI processing runs **on local hardware** with **zero API dependency** → **Operation cost = €0**
+All AI processing runs **on local hardware** with **zero API dependency**
 
 ---
 
