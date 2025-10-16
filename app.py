@@ -212,6 +212,21 @@ def get_product_details(product_name):
             
     except Exception as e:
         return jsonify({"error": f"Error interno del servidor: {e}"}), 500
+    
+# NUEVA FUNCIÓN DE AYUDA PARA FORMATEAR LA SALIDA FINAL
+def format_response_for_html(text):
+    #Formatea el texto final para HTML, creando párrafos y saltos de línea
+    #de manera consistente con el frontend.
+    
+    # Reemplazamos dobles saltos de línea por cierres y aperturas de párrafo.
+    # Es crucial hacer esto ANTES de reemplazar los saltos de línea simples.
+    formatted_text = text.strip().replace('\n\n', '</p><p>')
+
+    # Reemplazamos los saltos de línea simples restantes por <br>.
+    formatted_text = formatted_text.replace('\n', '<br>')
+
+    # Envolvemos todo el contenido en una etiqueta <p> para asegurar la consistencia.
+    return f"<p>{formatted_text}</p>"
 
 # =======================================================
 # FUNCIÓN PRINCIPAL DE CHAT (API /api/chat)
@@ -289,30 +304,58 @@ def chat():
              ollama_messages.append({"role": role, "content": content})
 
     try:
-        # 5. Llama a la API /api/chat local de Ollama
+        # 5. Llama a la API /api/chat local de Ollama en modo streaming
         payload = {"model": "llama3:8b", "messages": ollama_messages, "stream": True, "options": {"temperature": 0.3}}
         
-        # Realiza la petición con stream=True
-        ollama_response = requests.post(OLLAMA_API_URL, json=payload, stream=True)
-        ollama_response.raise_for_status()
+        ollama_response = requests.post(OLLAMA_API_URL, json=payload, stream=True, timeout=120)
+        ollama_response.raise_for_status() 
 
-        end_time = time.time()
-        latency_ms = round((end_time - start_time) * 1000)
-        
-        # 6. Procesar y Marcar la respuesta
-        response_data = ollama_response.json()
-        response_text_crudo = response_data['message']['content'].strip()
-        
-        # APLICAR MARCADO INTERACTIVO: Usando la lista de nombres completos de la BD
-        response_text = markup_product_names(response_text_crudo, products_to_markup) 
-        print(f"💬 Respuesta del LLM (antes de marcar): {response_text_crudo}\n")
-        
-        # DEVOLVER LA LATENCIA Y LA LISTA DE PRODUCTOS (Para la barra de sugerencias)
-        return jsonify({
-            "response": response_text,
-            "latency": latency_ms,
-            "recommended_products": products_to_markup 
-        })
+        # Función generadora que manejará el stream y el post-procesamiento
+        def generate():
+            response_text_crudo_parts = []
+            
+            # Itera sobre los chunks de texto del LLM y los envía al frontend
+            for chunk in ollama_response.iter_lines():
+                if chunk:
+                    try:
+                        line = chunk.decode('utf-8')
+                        data = json.loads(line)
+                        content_piece = data['message']['content']
+                        
+                        response_text_crudo_parts.append(content_piece)
+                        yield content_piece # Envía el trozo de texto crudo
+                    except json.JSONDecodeError:
+                        continue # Ignora líneas inválidas
+
+            # --- Post-procesamiento después de que el stream del LLM haya terminado ---
+            
+            # 1. Reconstruir la respuesta completa
+            response_text_crudo = "".join(response_text_crudo_parts).strip()
+            print(f"💬 Respuesta completa del LLM (antes de marcar): {response_text_crudo}\n")
+            
+            # 2. Aplicar el marcado interactivo de productos
+            response_text_with_spans = markup_product_names(response_text_crudo, products_to_markup)
+
+            # 3. --- CAMBIO CLAVE ---
+            #    Aplicar el formato de párrafo final a la respuesta que ya tiene los spans.
+            response_text_final = format_response_for_html(response_text_with_spans)
+
+            # 4. Calcular la latencia final
+            end_time = time.time()
+            latency_ms = round((end_time - start_time) * 1000)
+
+            # 5. Crear el payload final con la respuesta ya formateada
+            final_data = {
+                "final_response": response_text_final,
+                "latency": latency_ms,
+                "recommended_products": products_to_markup 
+            }
+
+            # 6. Enviar el payload final
+            yield f"__END_OF_STREAM__{json.dumps(final_data)}"
+
+        # Devuelve la respuesta como un stream de texto plano
+        return Response(stream_with_context(generate()), mimetype='text/plain')
     
     except requests.exceptions.ConnectionError:
         return jsonify({"error": "Error: El servidor Ollama (LLM Local) no está ejecutándose."}), 503

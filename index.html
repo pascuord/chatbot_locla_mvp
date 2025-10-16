@@ -351,79 +351,130 @@
             `;
         }
 
+        // --- NUEVA FUNCIÓN DE AYUDA para mantener el formato ---
+        // Esta función toma el texto crudo y lo envuelve en etiquetas <p> y <br>
+        // para que el formato sea estable durante el streaming.
+        // --- (La función de ayuda formatStreamedText se mantiene igual) ---
+        function formatStreamedText(text) {
+            const escapedText = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const html = '<p>' + escapedText
+                .trim()
+                .replace(/\n\n+/g, '</p><p>')
+                .replace(/\n/g, '<br>')
+                + '</p>';
+            return html;
+        }
+
         async function sendMessage() {
             const userInputElement = document.getElementById('userInput');
             const userMessage = userInputElement.value.trim();
-            const responseArea = document.getElementById('responseArea');
-
             if (!userMessage) return;
 
-            // Deshabilitar botones y limpiar input
-            userInputElement.value = ''; 
+            // --- (El código de deshabilitar UI no cambia) ---
+            userInputElement.value = '';
             document.getElementById('sendButton').disabled = true;
             document.getElementById('talkButton').disabled = true;
             document.getElementById('newChatButton').disabled = true;
 
             conversationHistory.push({ role: "user", parts: [{ text: userMessage }] });
-            
             renderHistory();
             
+            const responseArea = document.getElementById('responseArea');
+            const assistantMessageId = `msg-${Date.now()}`;
             responseArea.innerHTML += `
-                <div id="loadingIndicator" class="message-row assistant-row">
-                    <div class="chat-message assistant">
+                <div class="message-row assistant-row">
+                    <div class="chat-message assistant" id="${assistantMessageId}">
                         <span class="loading-dot"></span>
                         <span class="loading-dot"></span>
                         <span class="loading-dot"></span>
                     </div>
-                </div>
-            `;
+                </div>`;
             responseArea.scrollTop = responseArea.scrollHeight;
+            const assistantMessageElement = document.getElementById(assistantMessageId);
 
             try {
+                // --- INICIO DE DEPURACIÓN ---
+                console.groupCollapsed(`🔎 DEPURACIÓN DE RESPUESTA: ${new Date().toLocaleTimeString()}`);
+
                 const response = await fetch('http://localhost:5000/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ history: conversationHistory }) 
+                    body: JSON.stringify({ history: conversationHistory })
                 });
 
-                const data = await response.json();
-                
-                const loading = document.getElementById('loadingIndicator');
-                if (loading) loading.remove();
-
-                if (data.error) {
-                    conversationHistory.pop(); 
-                    renderHistory();
-                    responseArea.innerHTML += `<div class="error-message message-row user-row" style="color:red; justify-content: flex-start; padding: 10px;">Error: ${data.error}</div>`;
-                } else {
-                    const responseWithHtml = data.response;
-                    const latency = data.latency; // RECIBIR LATENCIA
-                    // 2. ¡LA SOLUCIÓN! Crea una versión limpia solo para la voz usando tu función.
-                    const textToSpeak = stripHtmlTags(responseWithHtml);
-                    
-                    // Almacenar el mensaje y la latencia
-                    conversationHistory.push({ 
-                        role: "model", 
-                        parts: [{ text: textToSpeak }], 
-                        latency: latency 
-                    }); 
-                    renderHistory();
-
-                    const utterance = new SpeechSynthesisUtterance(textToSpeak);
-                    // Si encontramos nuestra voz femenina, la usamos.
-                    if (femaleSpanishVoice) {
-                        utterance.voice = femaleSpanishVoice;
-                    }
-                    utterance.lang = 'es-ES';
-                    window.speechSynthesis.speak(utterance);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Ocurrió un error en el servidor');
                 }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                let firstChunk = true;
+                let fullRawText = ''; 
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    if (firstChunk) {
+                        assistantMessageElement.innerHTML = '';
+                        firstChunk = false;
+                    }
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    fullRawText += chunk;
+
+                    // --- CONSOLE LOG (DURANTE EL STREAM) ---
+                    const streamingHTML = formatStreamedText(fullRawText);
+                    console.log("STREAMING HTML:", streamingHTML);
+                    assistantMessageElement.innerHTML = streamingHTML;
+
+                    const endOfStreamMarker = '__END_OF_STREAM__';
+                    const endMarkerIndex = fullRawText.indexOf(endOfStreamMarker);
+                    
+                    if (endMarkerIndex !== -1) {
+                        const jsonPart = fullRawText.substring(endMarkerIndex + endOfStreamMarker.length);
+                        const finalData = JSON.parse(jsonPart);
+                        
+                        // --- CAMBIO CLAVE ---
+                        // El backend ya envía el HTML final formateado, así que lo usamos directamente.
+                        // Eliminamos el ".replace(/\n/g, '<br>')" que había aquí.
+                        const finalResponseHTML = finalData.final_response;
+                        console.log("🏁 FINAL HTML:", finalResponseHTML);
+                        assistantMessageElement.innerHTML = finalResponseHTML;
+                        
+                        // También guardamos el HTML final formateado en el historial.
+                        conversationHistory.push({ 
+                            role: "model", 
+                            parts: [{ text: finalResponseHTML }], // Guardamos el HTML formateado
+                            latency: finalData.latency
+                        });
+
+                        const textToSpeak = stripHtmlTags(finalResponseHTML);
+                        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+                        if (femaleSpanishVoice) utterance.voice = femaleSpanishVoice;
+                        utterance.lang = 'es-ES';
+                        window.speechSynthesis.speak(utterance);
+                        
+                        break;
+                    }
+                    responseArea.scrollTop = responseArea.scrollHeight;
+                }
+
             } catch (error) {
-                const loading = document.getElementById('loadingIndicator');
-                if (loading) loading.remove();
+                console.error("Error en sendMessage:", error);
+                const errorBubble = document.getElementById(assistantMessageId);
+                if (errorBubble) {
+                    errorBubble.style.backgroundColor = '#ffdddd';
+                    errorBubble.style.color = 'red';
+                    errorBubble.innerHTML = `Error: ${error.message}`;
+                }
                 conversationHistory.pop();
-                renderHistory();
-                responseArea.innerHTML += `<div class="error-message message-row user-row" style="color:red; justify-content: flex-start; padding: 10px;">Error de conexión local: Asegúrate de que Flask esté corriendo.</div>`;
+
             } finally {
+                console.log("--- FIN DE DEPURACIÓN ---");
+                console.groupEnd();
                 document.getElementById('sendButton').disabled = false;
                 document.getElementById('talkButton').disabled = false;
                 document.getElementById('newChatButton').disabled = false;
