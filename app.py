@@ -12,7 +12,7 @@ OLLAMA_EMBED_URL = "http://localhost:11434/api/embeddings"
 DB_NAME = 'db_cosmetica.db'
 EMBEDDING_MODEL = "nomic-embed-text" 
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -41,6 +41,35 @@ def cosine_similarity(v1, v2):
     if norm_v1 == 0 or norm_v2 == 0:
         return 0
     return dot_product / (np.linalg.norm(v1) * np.linalg.norm(v2))
+
+# --- FUNCIÓN DE FILTRO DE INTENCIÓN TÉCNICA (MODIFICADA) ---
+def is_technical_query(query):
+    """Detecta si la consulta se centra en un nombre INCI o un patrón técnico de la BD."""
+    query_upper = query.upper()
+    
+    # 1. Patrones químicos y conservantes comunes en tu TOP 100
+    technical_patterns = [
+        r'SODIUM', 'ALCOHOL', 'GLYCOL', 'PHENOXYETHANOL', 'BENZOATE', 'LINALOOL', 
+        'LIMONENE', 'TOCOPHEROL', 'BENZYL', 'HYDROXIDE', 'POTASSIUM', 'DIMETHICONE',
+        r'COPOLYMER', 'CHLORIDE', 'CAPRYLYL', 'ACETATE', 'STEARATE', 'CETEARYL',
+        r'TRIGLYCERIDE', 'TITANIUM', 'SILICA', 'SALICYLATE', 'OXIDES', r'\sACID\s',
+        r'MICA', 'CINNAMAL', 'COUMARIN', 'PALMITATE', 'PHOSPHATE', 'SULFATE', 
+        r'IONONE', r'ALKYL', 'LECITHIN', 'METHANEDIBENZOYLMETHANE' # Añadidos del top 100
+    ]
+    
+    # 2. Palabras clave de intención (Bloqueo por función o definición)
+    definition_keywords = ['COMPONENTE', 'INGREDIENTE']
+
+    # 3. VERIFICACIÓN: Si la pregunta es corta Y contiene un patrón técnico, la bloqueamos.
+    # Usamos un umbral de 5 palabras para evitar bloquear preguntas conversacionales largas.
+    if len(query.split()) < 7 and any(re.search(p, query_upper) for p in technical_patterns):
+        return True
+    
+    # 4. VERIFICACIÓN DE DEFINICIÓN TÉCNICA
+    if any(keyword in query_upper for keyword in definition_keywords):
+        return True
+    
+    return False
 
 # =======================================================
 # FUNCIÓN DE BÚSQUEDA DE CONTEXTO (RAG VECTORIAL)
@@ -81,6 +110,8 @@ def search_local_db(query):
         MIN_SIMILARITY_THRESHOLD = 0.4 
         
         if top_context_data and top_context_data[0][0] > MIN_SIMILARITY_THRESHOLD: 
+            print(f"✅ Contexto relevante encontrado (similitud: {top_context_data[0][0]:.2f}).")
+            
             context_for_llm = "\n--- CONTEXTO DE PRODUCTOS DE LA TIENDA ---\n"
             for score, data in top_context_data:
                 if score > MIN_SIMILARITY_THRESHOLD: 
@@ -117,7 +148,7 @@ def markup_product_names(text, product_names):
         
         # Estrategia: Tomar la parte inicial del nombre de la BD (las primeras 5-7 palabras clave)
         words = name.split()
-        max_words_to_use = min(7, len(words)) 
+        max_words_to_use = min(5, len(words)) 
         key_name_base = ' '.join(words[:max_words_to_use]).strip()
         
         # 2. Patrón Generoso: Busca la clave esencial Y se expande.
@@ -149,6 +180,39 @@ def markup_product_names(text, product_names):
     # 4. Limpieza final de espacios extra
     return ' '.join(text.split())
 
+# En app.py
+@app.route('/api/product/<product_name>', methods=['GET'])
+def get_product_details(product_name):    
+    try:
+        # 1. Conectando a la base de datos
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+               
+        # 2. Preparando la consulta SQL (MÁS ROBUSTA)
+        #    Usamos TRIM() para ignorar espacios extra en el nombre guardado en la BD.
+        sql_query = "SELECT nombre, descripcion, ingredientes FROM productos_scraped WHERE TRIM(nombre) = ?"
+        params = (product_name,)
+                
+        # 3. Ejecutando la consulta
+        cursor.execute(sql_query, params)
+        product = cursor.fetchone()
+        conn.close()
+        
+        # 4. Verificando el resultado
+        if product:
+            return jsonify({
+                "nombre": product[0],
+                "desc": product[1],
+                "ing": product[2],
+                "price": "19.99€", # Dato de relleno
+                "img": "https://placehold.co/120x120/ffb6c1/000000?text=Cosmetica" # Dato de relleno
+            })
+        else:
+            return jsonify({"error": "Producto no encontrado"}), 404
+            
+    except Exception as e:
+        return jsonify({"error": f"Error interno del servidor: {e}"}), 500
+
 # =======================================================
 # FUNCIÓN PRINCIPAL DE CHAT (API /api/chat)
 # =======================================================
@@ -163,6 +227,16 @@ def chat():
 
     user_query = conversation_history[-1]['parts'][0]['text']
     
+    # 1. FILTRO DE INTENCIÓN (NUEVO)
+    if is_technical_query(user_query):
+        print(f"⛔ Consulta técnica bloqueada: '{user_query}'")
+        # Respuesta fija y limpia (sin llamar a Ollama)
+        return jsonify({
+            "response": "**¡Lo siento mucho!** Como asistente especializado, mi conocimiento se enfoca estrictamente en las **recomendaciones de productos y sus beneficios**, no en el análisis químico detallado de ingredientes (INCI). Por favor, pregúntame cómo un producto en particular puede ayudarte con una necesidad (ej. 'piel sensible', 'anti-arrugas'), y con gusto te asistiré.",
+            "latency": 0, 
+            "recommended_products": []
+        })
+    
     start_time = time.time()
     
     retrieved_context, products_to_markup = search_local_db(user_query) 
@@ -175,14 +249,13 @@ def chat():
     SYSTEM_PROMPT = {
         "role": "system",
         "content": (
-            "ERES UN ASESOR DE VENTA DE COSMÉTICA. Tu nombre es 'La Experta en Piel'. "
-            "TONO: Profesional, amigable, cauto con pieles sensibles. "
-            #"**ESTRUCTURA DE RESPUESTA OBLIGATORIA:** Tu respuesta DEBE seguir la siguiente estructura de formato, usando negritas (**):"
-            #"1. **Comienza siempre con:** 'Hola! Como La Experta en Piel, estoy aquí para ayudarte...' "
-            #"2. **Utiliza títulos con dos puntos:** Emplea títulos como **'Recomendación inicial:'** y **'Paso a paso:'** para organizar tu respuesta."
-            #"3. **Formato de Lista:** Cuando enumeres puntos, pasos o métodos, DEBES usar el formato de lista Markdown: **1. Título de paso:** Contenido. (Añade un salto de línea antes de cada punto para la legibilidad)."
+            "ERES KIM, un asistente virtual especialista en cosmética. Tu objetivo es ayudar a los usuarios a encontrar los productos adecuados basándote en el contexto proporcionado. "            "TONO: Profesional, amigable, cauto con pieles sensibles. "
+            "OBJETIVO PRINCIPAL: Ayudar a los usuarios a encontrar productos cosméticos adecuados según sus necesidades, basándote en el 'CONTEXTO DE PRODUCTOS DE LA TIENDA' proporcionado. "
+            "NO PUEDES inventar información sobre productos o ingredientes que no estén en el 'CONTEXTO DE PRODUCTOS DE LA TIENDA'. "
+            "SIEMPRE que respondas, DEBES mencionar productos específicos del 'CONTEXTO DE PRODUCTOS DE LA TIENDA' para apoyar tus recomendaciones."
             "**PRECISIÓN RAG (OBLIGATORIO):** SIEMPRE que te pregunten por un producto, un ingrediente específico, o hagas una recomendación, DEBES basar tu respuesta ÚNICAMENTE en la información de los productos proporcionada en el 'CONTEXTO DE PRODUCTOS DE LA TIENDA'."
-            # INSTRUCCIÓN CRÍTICA: NO USAR HTML/MARKDOWN para nombres
+            "**INSTRUCCIÓN CRÍTICA DE IDENTIDAD:** Tu identidad es de género neutro. NUNCA uses un lenguaje que revele un género (masculino o femenino). Evita palabras como 'encantado/a', 'contento/a', 'experto/a', etc. Mantén todas tus respuestas de forma impersonal y neutra. Si tienes que referirte a tu rol, usa términos como 'asistente' o 'especialista'. "
+            "**INSTRUCCIÓN CRÍTICA**: NO USAR HTML/MARKDOWN para nombres"
             "**MARCADO DE PRODUCTO:** Cuando menciones un producto de la tienda, DEBES escribir su nombre tal cual, sin añadir ninguna etiqueta HTML o Markdown. El sistema de post-procesamiento lo marcará automáticamente."
             "Si no encuentras el producto en el contexto, informa al cliente que ese producto no está en stock, pero puedes recomendar uno similar."
             "Responde siempre en español."
@@ -193,10 +266,7 @@ def chat():
     system_content_augmented = SYSTEM_PROMPT['content']
     
     if retrieved_context:
-        #print("✅ Contexto relevante encontrado, añadiéndolo al prompt del sistema.")
-        #print(f"--- CONTEXTO AÑADIDO AL PROMPT DEL SISTEMA ---\n{retrieved_context}\n--------------------------------------------\n")
         system_content_augmented = f"{system_content_augmented}\n\n{retrieved_context}"
-        #print(f"--- PROMPT DEL SISTEMA A ENVIAR A OLLAMA ---\n{system_content_augmented}\n--------------------------------------------\n")
 
     ollama_messages = []
     
@@ -220,10 +290,11 @@ def chat():
 
     try:
         # 5. Llama a la API /api/chat local de Ollama
-        payload = {"model": "llama3:8b", "messages": ollama_messages, "stream": False, "options": {"temperature": 0.3}}
+        payload = {"model": "llama3:8b", "messages": ollama_messages, "stream": True, "options": {"temperature": 0.3}}
         
-        ollama_response = requests.post(OLLAMA_API_URL, json=payload, timeout=120)
-        ollama_response.raise_for_status() 
+        # Realiza la petición con stream=True
+        ollama_response = requests.post(OLLAMA_API_URL, json=payload, stream=True)
+        ollama_response.raise_for_status()
 
         end_time = time.time()
         latency_ms = round((end_time - start_time) * 1000)

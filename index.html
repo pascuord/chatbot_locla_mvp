@@ -164,13 +164,13 @@
             <svg class="expert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm-1-4h.01L12 7.01 11.99 7l-.01 6z"/>
             </svg>
-            La Experta en Piel (RAG Local)
+            Asistente de Cosmética Kim
             <button id="newChatButton" onclick="startNewChat()">Nuevo Chat</button>
         </h1>
         <div id="responseArea">
             <div id="initial-message" class="message-row assistant-row">
                 <div class="chat-message assistant">
-                    ¡Hola! Soy La Experta en Piel. Pregúntame sobre productos, ingredientes o rutinas.
+                    ¡Hola! Soy Kim, tu asistente especialista en cosmética. ¿En qué puedo ayudarte hoy?                
                 </div>
             </div>
         </div>
@@ -194,6 +194,31 @@
         let conversationHistory = [];
         let recognition;
         const initialMessageHTML = document.getElementById('initial-message').outerHTML; 
+
+        // --- NUEVO: Variable para almacenar la voz femenina ---
+        let femaleSpanishVoice = null;
+
+        // --- NUEVO: Función para encontrar y cargar la voz ---
+        function loadAndSetVoice() {
+            const voices = window.speechSynthesis.getVoices();
+            // Buscamos una voz que sea 'es-ES' y que en su nombre contenga indicios de ser femenina.
+            // Los nombres varían mucho: "Laura", "Paulina", "Google español", "Microsoft Helena - Spanish (Spain)"
+            femaleSpanishVoice = voices.find(voice => 
+                voice.lang === 'es-ES' && 
+                /female|mujer|paulina|laura|helena/i.test(voice.name)
+            );
+
+            // Si no encuentra una específicamente femenina, coge la primera en español que encuentre
+            if (!femaleSpanishVoice) {
+                femaleSpanishVoice = voices.find(voice => voice.lang === 'es-ES');
+            }
+        }
+
+        // --- NUEVO: Esperar a que el navegador cargue las voces ---
+        // Las voces no están disponibles de inmediato. Debemos esperar al evento 'voiceschanged'.
+        window.speechSynthesis.onvoiceschanged = loadAndSetVoice;
+        // Llamamos a la función una vez por si las voces ya estaban cargadas
+        loadAndSetVoice();
 
         // --- NUEVA FUNCIÓN DE UTILIDAD: ELIMINAR ETIQUETAS HTML ---
         function stripHtmlTags(html) {
@@ -226,7 +251,7 @@
 
 
         // --- FUNCIÓN QUE MUESTRA/OCULTA EL POPOVER DE PRODUCTO (CLIC) ---
-        function toggleProductCard(productName) {
+        async function toggleProductCard(productName) {
             window.speechSynthesis.cancel();
             
             const metadata = productMetadata[productName] || productMetadata["First Aid Beauty Ultra Repair"];
@@ -237,27 +262,33 @@
                 return;
             }
 
+            try {
+                const response = await fetch(`http://localhost:5000/api/product/${encodeURIComponent(productName)}`);
+            if (!response.ok) {
+                console.error("Producto no encontrado en la BD");
+                return;
+            }
+            const metadata = await response.json();
+
+            // Ahora construyes el HTML con la 'metadata' recibida de la API
             const cardHTML = `
                 <div id="productOverlay" class="product-popover-overlay" onclick="this.remove()">
                     <div class="product-popover-content" onclick="event.stopPropagation()">
-                        <span class="close-btn" onclick="document.getElementById('productOverlay').remove()">
-                            &times;
-                        </span>
-                        <img src="${metadata.img}" alt="${productName}">
+                        <span class="close-btn" onclick="document.getElementById('productOverlay').remove()">&times;</span>
+                        <img src="${metadata.img}" alt="${metadata.nombre}">
                         <div class="product-details">
-                            <h4>${productName}</h4>
+                            <h4>${metadata.nombre}</h4>
                             <p>${metadata.desc}</p>
-                            <p style="font-style: italic;">Ingredientes clave: ${metadata.ing.split(',').slice(0, 3).join(', ')}</p>
                             <p class="price">Precio: ${metadata.price}</p>
-                            <a href="#" class="buy-button" onclick="alert('Funcionalidad de compra simulada para ${productName}'); return false;">
-                                Añadir al Carrito
-                            </a>
+                            <a href="#" class="buy-button">Añadir al Carrito</a>
                         </div>
                     </div>
                 </div>
             `;
-
             document.body.insertAdjacentHTML('beforeend', cardHTML);
+        } catch (error) {
+            console.error("Error al obtener detalles del producto:", error);
+        }
         }
 
         // -----------------------------------------------------------
@@ -365,8 +396,10 @@
                     renderHistory();
                     responseArea.innerHTML += `<div class="error-message message-row user-row" style="color:red; justify-content: flex-start; padding: 10px;">Error: ${data.error}</div>`;
                 } else {
-                    const textToSpeak = data.response;
+                    const responseWithHtml = data.response;
                     const latency = data.latency; // RECIBIR LATENCIA
+                    // 2. ¡LA SOLUCIÓN! Crea una versión limpia solo para la voz usando tu función.
+                    const textToSpeak = stripHtmlTags(responseWithHtml);
                     
                     // Almacenar el mensaje y la latencia
                     conversationHistory.push({ 
@@ -377,6 +410,10 @@
                     renderHistory();
 
                     const utterance = new SpeechSynthesisUtterance(textToSpeak);
+                    // Si encontramos nuestra voz femenina, la usamos.
+                    if (femaleSpanishVoice) {
+                        utterance.voice = femaleSpanishVoice;
+                    }
                     utterance.lang = 'es-ES';
                     window.speechSynthesis.speak(utterance);
                 }
