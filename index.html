@@ -195,6 +195,12 @@
         let recognition;
         const initialMessageHTML = document.getElementById('initial-message').outerHTML; 
 
+        // --- NUEVA FUNCIÓN DE UTILIDAD: ELIMINAR ETIQUETAS HTML ---
+        function stripHtmlTags(html) {
+            // Regex para encontrar cualquier cosa entre < y > (incluidos)
+            return html.replace(/<[^>]*>/g, '');
+        }
+
         // === DATOS SIMULADOS PARA LA TARJETA ===
         const productMetadata = {
             "First Aid Beauty Ultra Repair": {

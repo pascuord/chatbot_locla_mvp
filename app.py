@@ -105,37 +105,46 @@ def search_local_db(query):
 def markup_product_names(text, product_names):
     """
     ENCAPSULA los nombres de producto de la lista product_names en el texto del LLM
-    utilizando una búsqueda flexible (REGEX).
+    utilizando una búsqueda flexible (REGEX) basada en la parte inicial del nombre.
     """
     if not product_names:
         return text
     
-    # Ordenar los nombres por longitud (descendente)
+    # 1. Ordenar los nombres por longitud (descendente)
     product_names.sort(key=len, reverse=True)
     
     for name in product_names:
         
-        # 1. Crear un patrón flexible basado en las palabras clave iniciales del nombre de la BD
-        # Esto soluciona el problema de que el LLM omite el final del nombre ("(75 ml)").
+        # Estrategia: Tomar la parte inicial del nombre de la BD (las primeras 5-7 palabras clave)
+        words = name.split()
+        max_words_to_use = min(7, len(words)) 
+        key_name_base = ' '.join(words[:max_words_to_use]).strip()
         
-        # Tomamos la parte inicial del nombre de la BD (las primeras 5-7 palabras clave)
-        key_name = ' '.join(name.split()[:3]) 
-
-        # 2. El patrón busca la clave (ej. 'Aceite corporal nutritivo Rose de Dr. Hauschka')
-        # Y permite que le sigan las palabras adicionales que el LLM pudo haber omitido en la respuesta.
-        # Buscamos el patrón CON LIMITES DE PALABRA al inicio, pero NO al final del nombre clave.
-        pattern = r'\b' + re.escape(key_name) + r'[^a-zA-Z0-9\s,\'-]*?' 
+        # 2. Patrón Generoso: Busca la clave esencial Y se expande.
+        # Patron: \b(ClaveBase[...caracteres_del_nombre...])
+        # Buscamos la clave esencial + cualquier caracter válido (alfanumérico, espacios, puntos, comas, guiones)
+        # hasta que encuentra un final de oración o un límite de palabra.
+        
+        # El Regex busca el inicio (\b) del nombre clave, captura esa clave, y luego captura CUALQUIER COSA
+        # que lo siga (incluyendo números, comas, etc.) hasta que encuentra una palabra que no coincide.
+        pattern = r'\b(' + re.escape(key_name_base) + r'[\s\w,():!\.\-\'\/]*?)' 
         
         def replace_with_span(match):
-            # match.group(0) es el texto que realmente coincidió en la respuesta del LLM (ej. "Aceite corporal nutritivo Rose de Dr. Hauschka")
-            matched_text = match.group(0).strip()
-            safe_name_for_js = name.replace("'", "\\'") # Usamos el nombre COMPLETO de la BD para la metadata del JS
+            # match.group(1) es la parte del texto del LLM que coincidió (el nombre + la descripción parcial)
+            matched_text = match.group(1).strip()
+            
+            # Verificación de sanity check: evitamos marcar texto demasiado corto
+            if len(matched_text.split()) < 3:
+                return match.group(0) 
+            
+            safe_name_for_js = name.replace("'", "\\'") # Nombre completo de la BD
+            print(f"🔖 Nombre substitucion: '{safe_name_for_js}'")
             
             # Devolvemos el SPAN clicable COMPLETO
             return f'<span class="product-button" onclick="toggleProductCard(\'{safe_name_for_js}\')">{matched_text}</span>'
 
-        # Sustituimos todas las ocurrencias del nombre de este producto
-        text = re.sub(pattern, replace_with_span, text, flags=re.IGNORECASE)
+        # Sustituimos solo la primera ocurrencia del patrón por el SPAN
+        text = re.sub(pattern, replace_with_span, text, flags=re.IGNORECASE, count=1)
 
     # 4. Limpieza final de espacios extra
     return ' '.join(text.split())
@@ -157,6 +166,7 @@ def chat():
     start_time = time.time()
     
     retrieved_context, products_to_markup = search_local_db(user_query) 
+    #print(f"🔍 Productos para marcar: {products_to_markup}\n")
 
     if retrieved_context is None:
         return jsonify({"error": "Error crítico al generar embeddings. Verifique el servidor Ollama (nomic-embed-text)."}), 503
@@ -181,18 +191,32 @@ def chat():
 
     # 3. AUMENTO DEL PROMPT
     system_content_augmented = SYSTEM_PROMPT['content']
-    if retrieved_context:
-        system_content_augmented = f"{system_content_augmented}\n\n{retrieved_context}"
-
-    # 4. Construir el historial para Ollama
-    ollama_messages = [{"role": "system", "content": system_content_augmented}]
     
+    if retrieved_context:
+        #print("✅ Contexto relevante encontrado, añadiéndolo al prompt del sistema.")
+        #print(f"--- CONTEXTO AÑADIDO AL PROMPT DEL SISTEMA ---\n{retrieved_context}\n--------------------------------------------\n")
+        system_content_augmented = f"{system_content_augmented}\n\n{retrieved_context}"
+        #print(f"--- PROMPT DEL SISTEMA A ENVIAR A OLLAMA ---\n{system_content_augmented}\n--------------------------------------------\n")
+
+    ollama_messages = []
+    
+    # 4. Construir el historial para Ollama
+    ollama_messages.append({"role": "system", "content": system_content_augmented})
+
+    # 1b. Limpiar el historial de HTML y añadirlo
+    HTML_TAG_REGEX = re.compile(r'<[^>]+>') # Regex para eliminar todas las etiquetas HTML
+
     for entry in conversation_history:
         role = entry['role']
         content = entry['parts'][0]['text']
+        
+        # Si el mensaje proviene del modelo, eliminamos el HTML (los spans clicables)
         if role == 'model':
-            role = 'assistant'
-        ollama_messages.append({"role": role, "content": content})
+            # Eliminamos todas las etiquetas HTML del contenido para evitar la corrupción del prompt
+            content = HTML_TAG_REGEX.sub('', content).strip() 
+        
+        if content:
+             ollama_messages.append({"role": role, "content": content})
 
     try:
         # 5. Llama a la API /api/chat local de Ollama
@@ -210,6 +234,7 @@ def chat():
         
         # APLICAR MARCADO INTERACTIVO: Usando la lista de nombres completos de la BD
         response_text = markup_product_names(response_text_crudo, products_to_markup) 
+        print(f"💬 Respuesta del LLM (antes de marcar): {response_text_crudo}\n")
         
         # DEVOLVER LA LATENCIA Y LA LISTA DE PRODUCTOS (Para la barra de sugerencias)
         return jsonify({
