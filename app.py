@@ -178,7 +178,7 @@ def markup_product_names(text, product_names):
         text = re.sub(pattern, replace_with_span, text, flags=re.IGNORECASE, count=1)
 
     # 4. Limpieza final de espacios extra
-    return ' '.join(text.split())
+    return text
 
 # En app.py
 @app.route('/api/product/<product_name>', methods=['GET'])
