@@ -44,29 +44,44 @@ def cosine_similarity(v1, v2):
 
 # --- FUNCIÓN DE FILTRO DE INTENCIÓN TÉCNICA (MODIFICADA) ---
 def is_technical_query(query):
-    """Detecta si la consulta se centra en un nombre INCI o un patrón técnico de la BD."""
+    """Detecta si la consulta se centra en un nombre INCI o en la definición de un término técnico."""
     query_upper = query.upper()
     
-    # 1. Patrones químicos y conservantes comunes en tu TOP 100
+    # 1. Patrones químicos y conservantes (sin cambios)
     technical_patterns = [
         r'SODIUM', 'ALCOHOL', 'GLYCOL', 'PHENOXYETHANOL', 'BENZOATE', 'LINALOOL', 
         'LIMONENE', 'TOCOPHEROL', 'BENZYL', 'HYDROXIDE', 'POTASSIUM', 'DIMETHICONE',
         r'COPOLYMER', 'CHLORIDE', 'CAPRYLYL', 'ACETATE', 'STEARATE', 'CETEARYL',
         r'TRIGLYCERIDE', 'TITANIUM', 'SILICA', 'SALICYLATE', 'OXIDES', r'\sACID\s',
         r'MICA', 'CINNAMAL', 'COUMARIN', 'PALMITATE', 'PHOSPHATE', 'SULFATE', 
-        r'IONONE', r'ALKYL', 'LECITHIN', 'METHANEDIBENZOYLMETHANE' # Añadidos del top 100
+        r'IONONE', r'ALKYL', 'LECITHIN', 'METHANEDIBENZOYLMETHANE'
     ]
     
-    # 2. Palabras clave de intención (Bloqueo por función o definición)
+    # 2. Palabras clave de intención
     definition_keywords = ['COMPONENTE', 'INGREDIENTE']
 
-    # 3. VERIFICACIÓN: Si la pregunta es corta Y contiene un patrón técnico, la bloqueamos.
-    # Usamos un umbral de 5 palabras para evitar bloquear preguntas conversacionales largas.
+    # --- LÓGICA MEJORADA ---
+    # 2b. Patrones que buscan una definición explícita
+    definition_seeking_patterns = [
+        r'\bQUÉ ES\b',
+        r'\bPARA QUÉ SIRVE\b',
+        r'\bCUÁL ES LA FUNCIÓN\b',
+        r'\bDEFINICIÓN DE\b'
+    ]
+
+    # 3. VERIFICACIÓN: Si la pregunta es corta Y contiene un patrón químico, la bloqueamos.
+    #    Ejemplo: "qué es LINALOOL" -> Bloqueado
     if len(query.split()) < 7 and any(re.search(p, query_upper) for p in technical_patterns):
         return True
-    
-    # 4. VERIFICACIÓN DE DEFINICIÓN TÉCNICA
-    if any(keyword in query_upper for keyword in definition_keywords):
+
+    # 4. VERIFICACIÓN DE DEFINICIÓN TÉCNICA (MÁS PRECISA)
+    #    Debe contener una palabra clave Y un patrón de búsqueda de definición.
+    contains_keyword = any(keyword in query_upper for keyword in definition_keywords)
+    is_seeking_definition = any(re.search(p, query_upper) for p in definition_seeking_patterns)
+
+    if contains_keyword and is_seeking_definition:
+        # Ejemplo: "¿Cuál es la función del ingrediente X?" -> Bloqueado
+        # PERO: "¿Qué ingredientes tiene?" -> Permitido
         return True
     
     return False
