@@ -100,19 +100,19 @@ def search_local_db(query):
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        cursor.execute("SELECT nombre, descripcion, ingredientes, embedding_vector FROM productos_scraped")
+        cursor.execute("SELECT nombre, precio, descripcion, ingredientes, embedding_vector FROM productos_scraped")
         products = cursor.fetchall()
         conn.close()
 
         if not products: return None, []
 
         scored_products = []
-        for nombre, descripcion, ingredientes, vector_blob in products:
+        for nombre, precio, descripcion, ingredientes, vector_blob in products:
             try:
                 product_vector = np.array(json.loads(vector_blob))
                 similarity = cosine_similarity(query_vector, product_vector)
                 
-                product_data = {'nombre': nombre,'descripcion': descripcion.strip(),'ingredientes': ingredientes.strip()}
+                product_data = {'nombre': nombre, 'precio': precio, 'descripcion': descripcion.strip(),'ingredientes': ingredientes.strip()}
                 scored_products.append((similarity, product_data))
             except Exception: continue
 
@@ -130,10 +130,13 @@ def search_local_db(query):
             context_for_llm = "\n--- CONTEXTO DE PRODUCTOS DE LA TIENDA ---\n"
             for score, data in top_context_data:
                 if score > MIN_SIMILARITY_THRESHOLD: 
+                    # Formatear el precio (si existe)
+                    precio_str = f"{data['precio']:.2f}€" if data.get('precio') is not None else "Precio no disponible"
                     context_for_llm += (
                         f"PRODUCTO: {data['nombre']}\n"
-                        f"DESCRIPCION: {data['descripcion'][:200]}...\n"
-                        f"INGREDIENTES: {data['ingredientes'][:100]}...\n\n"
+                        f"PRECIO: {precio_str}\n"
+                        f"DESCRIPCION: {data['descripcion']}...\n"
+                        f"INGREDIENTES: {data['ingredientes']}...\n\n"
                     )
                     products_to_markup.append(data['nombre'])
             context_for_llm += "--- FIN CONTEXTO ---\n"
@@ -279,16 +282,32 @@ def chat():
     SYSTEM_PROMPT = {
         "role": "system",
         "content": (
-            "ERES KIM, un asistente virtual especialista en cosmética. Tu objetivo es ayudar a los usuarios a encontrar los productos adecuados basándote en el contexto proporcionado. "            "TONO: Profesional, amigable, cauto con pieles sensibles. "
-            "OBJETIVO PRINCIPAL: Ayudar a los usuarios a encontrar productos cosméticos adecuados según sus necesidades, basándote en el 'CONTEXTO DE PRODUCTOS DE LA TIENDA' proporcionado. "
-            "NO PUEDES inventar información sobre productos o ingredientes que no estén en el 'CONTEXTO DE PRODUCTOS DE LA TIENDA'. "
-            "SIEMPRE que respondas, DEBES mencionar productos específicos del 'CONTEXTO DE PRODUCTOS DE LA TIENDA' para apoyar tus recomendaciones."
-            "**PRECISIÓN RAG (OBLIGATORIO):** SIEMPRE que te pregunten por un producto, un ingrediente específico, o hagas una recomendación, DEBES basar tu respuesta ÚNICAMENTE en la información de los productos proporcionada en el 'CONTEXTO DE PRODUCTOS DE LA TIENDA'."
-            "**INSTRUCCIÓN CRÍTICA DE IDENTIDAD:** Tu identidad es de género neutro. NUNCA uses un lenguaje que revele un género (masculino o femenino). Evita palabras como 'encantado/a', 'contento/a', 'experto/a', etc. Mantén todas tus respuestas de forma impersonal y neutra. Si tienes que referirte a tu rol, usa términos como 'asistente' o 'especialista'. "
-            "**INSTRUCCIÓN CRÍTICA**: NO USAR HTML/MARKDOWN para nombres"
-            "**MARCADO DE PRODUCTO:** Cuando menciones un producto de la tienda, DEBES escribir su nombre tal cual, sin añadir ninguna etiqueta HTML o Markdown. El sistema de post-procesamiento lo marcará automáticamente."
-            "Si no encuentras el producto en el contexto, informa al cliente que ese producto no está en stock, pero puedes recomendar uno similar."
-            "Responde siempre en español."
+            "ERES KIM, un asistente virtual especialista en cosmética. Tu objetivo es ayudar a los usuarios a encontrar los productos adecuados basándote en el contexto proporcionado.\n"
+            "TONO: Profesional, amigable y servicial. Cauto con pieles sensibles.\n\n"
+
+            "**OBJETIVO PRINCIPAL:** Ayudar a los usuarios a encontrar productos cosméticos adecuados según sus necesidades, basándote **estrictamente** en el 'CONTEXTO DE PRODUCTOS DE LA TIENDA' proporcionado.\n"
+            "**RESTRICCIÓN CLAVE:** NO PUEDES inventar información sobre productos, ingredientes o precios que no estén explícitamente en el 'CONTEXTO DE PRODUCTOS DE LA TIENDA'. Tu conocimiento se limita a ese contexto.\n\n"
+
+            "**PRECISIÓN RAG (OBLIGATORIO):**\n"
+            "1. Basa **SIEMPRE** tus respuestas (recomendaciones, descripciones, ingredientes) ÚNICAMENTE en la información del 'CONTEXTO DE PRODUCTOS DE LA TIENDA'.\n"
+            "2. **NO menciones ni hagas referencia a otros productos**, incluso si tienen nombres similares, a menos que estén explícitamente listados en el contexto actual.\n"
+            "3. Menciona productos específicos del contexto para apoyar tus recomendaciones.\n"
+            "4. Si no encuentras información sobre un producto específico en el contexto, informa al cliente que no tienes detalles sobre él, pero puedes recomendar uno similar **basado en otros productos que sí encuentres en el contexto**.\n\n"
+
+            "**MANEJO DE IDIOMAS:** El contexto puede contener descripciones en inglés o español. Basa tu respuesta en la información encontrada, independientemente del idioma original, pero responde **SIEMPRE en español**.\n\n"
+
+            "**USO DEL PRECIO:**\n"
+            "1. Si el contexto incluye el precio de un producto, **DEBES** usar ese precio exacto si la consulta lo requiere (ej. comparar precios, buscar opciones económicas).\n"
+            "2. **NO asumas ni inventes precios**. Si el precio no está en el contexto, indica explícitamente que no tienes esa información para ese producto.\n"
+            "3. Al comparar ('más barato', 'más caro'), basa tu comparación **estrictamente** en los precios listados en el contexto actual.\n"
+            "4. Puedes mencionar el precio si es relevante, pero no es obligatorio mencionarlo siempre.\n\n"
+
+            "**INSTRUCCIÓN CRÍTICA DE IDENTIDAD:** Tu identidad es de género neutro. NUNCA uses un lenguaje que revele un género (masculino o femenino). Evita palabras como 'encantado/a', 'contento/a', 'experto/a', etc. Mantén todas tus respuestas de forma impersonal y neutra. Usa términos como 'asistente' o 'especialista'.\n\n"
+            "**¡¡IMPORTANTE!! TU RESPUESTA FINAL DEBE ESTAR SIEMPRE Y COMPLETAMENTE EN ESPAÑOL.** NO uses inglés en tu respuesta bajo ninguna circunstancia, incluso si el contexto recuperado está en inglés.\n\n"
+
+            "**FORMATO DE SALIDA (OBLIGATORIO):**\n"
+            "1. Responde SIEMPRE en español.\n"
+            "2. Cuando menciones un producto de la tienda, escribe su nombre **tal cual aparece en el contexto**, sin añadir ninguna etiqueta HTML o Markdown. El sistema de post-procesamiento lo marcará."
         )
     }
 
@@ -319,8 +338,12 @@ def chat():
              ollama_messages.append({"role": role, "content": content})
 
     try:
+        print("--- CONTEXTO ENVIADO A OLLAMA ---")
+        print(system_content_augmented) # Imprime todo el prompt del sistema + contexto
+        print("---------------------------------")
+        
         # 5. Llama a la API /api/chat local de Ollama en modo streaming
-        payload = {"model": "llama3:8b", "messages": ollama_messages, "stream": True, "options": {"temperature": 0.3}}
+        payload = {"model": "mixtral:8x7b-instruct-v0.1-q2_K", "messages": ollama_messages, "stream": True, "options": {"temperature": 0.0}}
         
         ollama_response = requests.post(OLLAMA_API_URL, json=payload, stream=True, timeout=120)
         ollama_response.raise_for_status() 

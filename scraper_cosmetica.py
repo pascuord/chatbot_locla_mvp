@@ -130,83 +130,110 @@ def scrape_product_data(url):
         
         # --- EXTRACCIÓN DE DATOS ---
 
-        # 1. Nombre
+        # 1. Nombre (Sin cambios)
         nombre_element = soup.find('h1', id='product-title')
         nombre = nombre_element.text.strip() if nombre_element else 'Producto Desconocido'
         
-        # 2. Descripción
+        # 2. Descripción (Lógica defensiva sin cambios)
         descripcion = None
         descripcion_container = soup.find('div', id='product-description-0')
         if descripcion_container:
             descripcion_element = descripcion_container.find('div', class_='attribute-content')
-            if descripcion_element:
+            if descripcion_element: 
                 desc_text = descripcion_element.text.strip()
                 if desc_text:
                     descripcion = desc_text
 
-        # 3. Ingredientes
+        # 3. Ingredientes (--- LÓGICA DE BÚSQUEDA MÚLTIPLE Y SÚPER-DEFENSIVA ---)
         ingredientes = None 
+        ingredientes_container = None
         
-        ingredientes_container = soup.find('div', id='product-description-1')
-        if not ingredientes_container:
-            ingredientes_container = soup.find('div', id='product-description-2')
-        if not ingredientes_container:
-            ingredientes_container = soup.find('div', class_='product-description-1')
-        
-        if ingredientes_container:
-            ingredientes_element = ingredientes_container.find('div', class_='attribute-content')
+        try:
+            # --- ESTRATEGIA DE BÚSQUEDA MÚLTIPLE ---
+            # Intento 1: El más fiable (aria-labelledby)
+            ingredientes_container = soup.find('div', {'aria-labelledby': 'Ingredientes'})
             
-            if ingredientes_element:
-                first_p = ingredientes_element.find('p')
-                ingredientes_texto_crudo = first_p.text.strip() if first_p else ingredientes_element.text.strip()
+            # Intento 2: Fallback al id="product-description-1" (para otros productos)
+            if not ingredientes_container:
+                ingredientes_container = soup.find('div', id='product-description-1')
+            
+            # Intento 3: Fallback al id="product-description-2"
+            if not ingredientes_container:
+                ingredientes_container = soup.find('div', id='product-description-2')
+            
+            # --- LÓGICA DE EXTRACCIÓN SÚPER-DEFENSIVA ---
+            if ingredientes_container:
+                ingredientes_element = ingredientes_container.find('div', class_='attribute-content')
                 
-                ingredientes_limpio = ' '.join(ingredientes_texto_crudo.split()).strip()
-                limpiador_aviso = "For the latest information, it is recommended to review the ingredient list printed on the packaging of the product prior to usage or consumption."
-                ingredientes_limpio = ingredientes_limpio.replace(limpiador_aviso, '').strip()
-                
-                if ingredientes_limpio:
-                    ingredientes = ingredientes_limpio
+                if ingredientes_element:
+                    ingredientes_texto_crudo = None
+                    
+                    # Encontrar todos los párrafos dentro del contenedor
+                    all_ps = ingredientes_element.find_all('p')
+                    
+                    if all_ps:
+                        # Iterar sobre ellos para encontrar el primero con texto
+                        for p in all_ps:
+                            # --- CORRECCIÓN CLAVE: Comprobar que .text no sea None ANTES de .strip() ---
+                            if p.text and p.text.strip() != "":
+                                ingredientes_texto_crudo = p.text.strip()
+                                break # Encontramos el primer párrafo con texto, salimos
+                    
+                    # Fallback: si el bucle no encontró nada (ej. no hay <p>), usar el texto completo
+                    if not ingredientes_texto_crudo and ingredientes_element.text:
+                        ingredientes_texto_crudo = ingredientes_element.text.strip()
+
+                    # Limpieza final (solo si encontramos texto)
+                    if ingredientes_texto_crudo:
+                        ingredientes_limpio = ' '.join(ingredientes_texto_crudo.split()).strip()
+                        limpiador_aviso = "For the latest information, it is recommended to review the ingredient list printed on the packaging of the product prior to usage or consumption."
+                        ingredientes_limpio = ingredientes_limpio.replace(limpiador_aviso, '').strip()
+                        
+                        # Verificación anti-instrucciones
+                        if 'CUÁNDO UTILIZAR' in ingredientes_limpio.upper() or 'APLICACIÓN:' in ingredientes_limpio.upper():
+                            print(f"⚠️ 'Ingredientes' encontrados pero parecían instrucciones. Descartado. ({url})")
+                            ingredientes = None
+                        elif ingredientes_limpio:
+                            ingredientes = ingredientes_limpio
+            else:
+                print(f"ℹ️ No se encontró ningún contenedor de ingredientes para {url}")
+                 
+        except Exception as e:
+            # Capturamos el error 'NoneType' aquí
+            print(f"⚠️ Error CRÍTICO al procesar ingredientes para {url}: {e}")
+            ingredientes = None
+
         
-        # --- 4. Extraer Precio (LÓGICA ROBUSCA MEJORADA) ---
+        # --- 4. Extraer Precio (Lógica robusta sin cambios) ---
         precio = None
         price_text = None
         try:
             price_container = soup.find('div', id='product-price')
             if price_container:
-                
-                # Intento 1: Buscar el precio de oferta (HTML 2)
                 sale_price_span = price_container.find('span', class_='text-gray-900')
-                
                 if sale_price_span:
                     price_text = sale_price_span.text.strip()
                 else:
-                    # Intento 2: Buscar el precio normal (HTML 1)
                     p_tag = price_container.find('p', class_='text-2xl font-medium')
                     if p_tag:
                         regular_price_span = p_tag.find('span')
                         if regular_price_span:
                             price_text = regular_price_span.text.strip()
-
-                # Si hemos encontrado texto de precio, lo limpiamos y convertimos
                 if price_text:
-                    # Limpiamos todo lo que no sea un dígito, una coma o un punto
                     price_clean = re.sub(r"[^0-9,.]", "", price_text).strip()
-                    # Reemplazamos la coma decimal por un punto
                     price_clean = price_clean.replace(',', '.')
-                    
-                    if price_clean: # Asegurarnos de que no esté vacío después de limpiar
+                    if price_clean:
                         precio = float(price_clean)
                     else:
                         print(f"⚠️ No se pudo extraer un número del texto de precio '{price_text}' en {url}")
                 else:
                     print(f"⚠️ No se pudo encontrar un span de precio válido en {url}")
-
         except Exception as e:
             print(f"⚠️ Error al procesar el precio para {url}: {e}")
-            precio = None # Se guardará como NULL
+            precio = None
 
         
-        # --- 5. Generar el Embedding (Mejorado para manejar None y añadir precio) ---
+        # --- 5. Generar el Embedding (Sin cambios) ---
         descripcion_para_embedding = descripcion if descripcion is not None else ""
         ingredientes_para_embedding = ingredientes if ingredientes is not None else ""
         precio_para_embedding = f"Precio: {precio}€" if precio is not None else ""
@@ -215,14 +242,14 @@ def scrape_product_data(url):
         embedding_vector_json = generate_ollama_embedding(embedding_text)
         
         if embedding_vector_json is None:
-            return None # Saltamos el producto si falla la generación del vector
+            return None
 
-        # --- 6. Retornar el diccionario con el vector y el precio ---
+        # --- 6. Retornar el diccionario (Sin cambios) ---
         return {
             'nombre': nombre,
             'descripcion': descripcion,
             'ingredientes': ingredientes,
-            'precio': precio, # <-- ¡Nueva columna añadida!
+            'precio': precio,
             'embedding_vector': embedding_vector_json
         }
 
@@ -233,6 +260,33 @@ def scrape_product_data(url):
         print(f"❌ Error interno de parsing en {url}: {e}")
         return None
 
+        
+        # --- 5. Generar el Embedding (Sin cambios) ---
+        descripcion_para_embedding = descripcion if descripcion is not None else ""
+        ingredientes_para_embedding = ingredientes if ingredientes is not None else ""
+        precio_para_embedding = f"Precio: {precio}€" if precio is not None else ""
+
+        embedding_text = f"Producto: {nombre}. {precio_para_embedding}. DESCRIPCION: {descripcion_para_embedding} INGREDIENTES: {ingredientes_para_embedding}"
+        embedding_vector_json = generate_ollama_embedding(embedding_text)
+        
+        if embedding_vector_json is None:
+            return None
+
+        # --- 6. Retornar el diccionario (Sin cambios) ---
+        return {
+            'nombre': nombre,
+            'descripcion': descripcion,
+            'ingredientes': ingredientes,
+            'precio': precio,
+            'embedding_vector': embedding_vector_json
+        }
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error HTTP/Conexión al acceder a {url}: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Error interno de parsing en {url}: {e}")
+        return None
 
 # =======================================================
 # LÓGICA DE EJECUCIÓN PRINCIPAL
@@ -251,9 +305,15 @@ if __name__ == '__main__':
     if not product_urls:
         print("No se encontraron URLs en el archivo. Verifica 'product_urls.txt'. Finalizando.")
     else:
+        # --- CAMBIO: Guardamos el total de URLs ---
+        total_urls = len(product_urls)
         print(f"Total de {len(product_urls)} URLs cargadas. Iniciando el proceso de extracción y vectorización...")
         
         for i, url in enumerate(product_urls):
+            # --- CAMBIO: Imprimimos el contador antes de procesar ---
+            # (i + 1) para que el contador empiece en 1, no en 0.
+            print(f"\n--- [ Procesando Producto {i + 1} / {total_urls} ] ---")
+            
             product_data = scrape_product_data(url)
             if product_data:
                 save_to_db(product_data)
